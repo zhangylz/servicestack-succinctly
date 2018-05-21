@@ -153,3 +153,321 @@ SetConfig(new EndpointHostConfig
 {
 	EnableFeatures = Feature.All.Remove(Feature.Metadata)
 });
+
+Visual Studio Project Structure 
+There are many ways to keep the assemblies separated, and this usually depends on the 
+project’s needs. When working with services, I usually apply the following three rules: 
+ The facade layer should be a thin layer without any business logic. 
+ Keep the application implementation separated from the hosting application. This is very 
+useful in case we want to reuse the application logic and expose it in a different way (e.g., 
+as a desktop app, web service, or web application). 
+ Keep the Request and Response DTOs in a separate assembly as this can be shared with 
+the client (especially useful for .NET clients). 
+
+
+ServiceStack.Succinctly.Host 
+	ServiceStack.Succinctly.Host is the entry point of the application and the only component 
+	that communicates with the client. It contains the exposed services and all of the necessary 
+	plumbing, routing, instrumentation, etc. This is exactly where we are going to use the 
+	ServiceStack framework functionalities. 
+ServiceStack.Succinctly.ServiceInterface 
+	ServiceStack.Succinctly.ServiceInterface contains Request and Response DTOs. This 
+	library can be directly shared with the client application to ease the communication and 
+	transformation of data. This library shouldn’t contain any application logic. 
+OrderManagement.Core 
+	OrderManagement.Core contains the domain model of the application and the required 
+	business logic, application logic, etc. 
+OrderManagement.DataAccessLayer 
+	OrderManagement.DataAccessLayer contains the logic to access the database and the 
+	related repositories. 
+	
+Chapter 4 Solution Configuration
+Q1: ServiceStack EndpointHostConfig & WebHost does not exist? C# MVC
+Advice: https://stackoverflow.com/questions/20431619/servicestack-endpointhostconfig-webhost-does-not-exist-c-sharp-mvc
+as install servicestack， please execute command 
+PM> Install-Package ServiceStack -Version 3.9.56     (packages.config)
+if ServiceStack installed, please uninstall 
+ex.  Uninstall-Package  ServiceStack.Text
+
+Chapter 5 Service Implementation
+For all three services, we will implement the following components: 
+ Service Model (Request and Response DTO) object definitions. 
+ Route specification. 
+ Mapper(s) implementation. 
+ Validator implementation. 
+ Service implementation. 
+ Configuration (application host) wiring everything together. 
+   5.1  DTO objects
+   ServiceStack.Succinctly.ServiceInterface
+   defined class Status & Link(using System.Runtime.Serialization;)
+
+	Removing Namespaces 
+	To remove superfluous namespaces from XML returned objects, add the following code to the 
+	Assembly.cs in the ServiceStack.Succinctly.ServiceInterface project. 
+
+	[assembly: ContractNamespace("", ClrNamespace="ServiceStack.Succinctly.ServiceInte
+	rface.OrderModel")] 
+	[assembly: ContractNamespace("", ClrNamespace="ServiceStack.Succinctly.ServiceInte
+	rface.OrderItemModel")] 
+	[assembly: ContractNamespace("", ClrNamespace="ServiceStack.Succinctly.ServiceInte
+	rface.ProductModel")]
+	[assembly: ContractNamespace("", ClrNamespace="ServiceStack.Succinctly.ServiceInte
+	rface")]
+	
+	Product Service
+	namespace OrderManagement.Core.Domain class Product can be seen as a reference data class as it is a property of 
+	the OrderItem class.
+	
+	Service Model
+	As a particularity of  the service, I've chosen to create two separate DTOs for managing inserts and updates.
+	ServiceStack.Succinctly.ServiceInterface.ProductModel
+	CreateProduct DeleteProduct GetProduct UpdateProduct ProductResponse
+	The GetProducts class intentionally does not have properties；it is mainly used for 
+	namespace ServiceStack.Succinctly.ServiceInterface.ProductModel
+	{
+		public class GetProducts { }
+	}
+	
+	
+	Almost all of the Service methods will return the ProductResponse object. ProductResponse is 
+	a mirror of the Product and, as we will see, it can contain more or less information. In our case, 
+	it contains a list of Links and no information about the Product.Version, which is only used 
+	for optimistic concurrency control. 
+	ProductsResponse instead will hold a list of ProductResponse. This is helpful as we can reuse 
+	this object and enrich it with further attributes that can be useful for paging, navigation, etc. 
+	public class ProductResponse 
+	{ 
+		public int        Id     { get; set; } 
+		public string     Name   { get; set; } 
+		public Status     Status { get; set; } 
+		public List<Link> Links  { get; set; } 
+	} 
+	 
+	public class ProductsResponse 
+	{ 
+		public List<ProductResponse> Products { get; set; } 
+	}
+	
+	5.2 Route Specification
+	In the application host (Global.asax.cs), we need to register the various routes related to the 
+	Product service. As we have seen in the previous chapters, this is done either in the application 
+	host’s constructor or in the Configure method. I’ve chosen to use the constructor because I 
+	want to use the Configure method only for the IoC-related items. 
+	 
+	public ServiceAppHost():                    base("Order Management", typeof (Servi
+	ceAppHost).Assembly) 
+	{ 
+		Routes 
+		  .Add<GetProducts>  ("/products",      "GET",    "Returns Products") 
+		  .Add<GetProduct>   ("/products/{Id}", "GET",    "Returns a Product") 
+		  .Add<CreateProduct>("/products",      "POST",   "Creates a Product") 
+		  .Add<UpdateProduct>("/products/{Id}", "PUT",    "Updates a Product") 
+		  .Add<DeleteProduct>("/products/{Id}", "DELETE", "Deletes a Product"); 
+	}
+	The ServiceStack Routes.Add() method currently doesn’t expose the method signature that 
+	we have just seen. To achieve this, I’ve created an extension method. The Routes property 
+	implements the IServiceRoute interface and, once we know this, it’s very easy to extend. 
+	using ServiceStack.Succinctly.Host.Extensions; 
+	public static class RoutesExtensions 
+	{ 
+		public static IServiceRoutes Add<T> (this IServiceRoutes routes,  
+				   string restPath, string verbs, string summary) 
+		{ 
+			return routes.Add(typeof (T), restPath, verbs, summary, ""); 
+		} 
+	  
+		public static IServiceRoutes Add<T>(this IServiceRoutes routes,  
+				   string restPath, string verbs, string summary, string notes) 
+		{ 
+			return routes.Add(typeof(T), restPath, verbs, summary, notes); 
+		} 
+	} 
+	
+	5.3 Mapper(s) implementation. 
+	Product Mapper Implementation 
+	We need to map the data back and forth from the domain object model to the service object 
+	model (DTOs). The best way to do so is to create a specific class that enables the application to 
+	transform the Product domain object to ProductResponse and 
+	CreateProduct/UpdateProduct to the Product. Because this can be quite a heavy workload 
+	in the case of big classes, I advise you to use some specific libraries such as AutoMapper as 
+	this would decrease the amount of necessary code. Explaining how AutoMapper works is 
+	outside the scope of this book but, as we will see, it’s pretty intuitive and easy to use. 
+	Adding the AutoMapper library to the project is as easy as running the following NuGet 
+	command:  PM> Install-Package AutoMapper  
+	AutoMapper中Mapper的CreateMap方法弃用解决方法
+	https://blog.csdn.net/yzj_xiaoyue/article/details/62419152
+	将以前使用的Mapper.CreateMap<Source,Dest>()方法改为Mapper.Initialize(x=>x.CreateMap<Source,Dest>()());即可。
+	
+	The ProductMapper implements the IProductMapper interface, which will make it easier to be 
+	injected to the Service. Let’s create the following file in the ServiceStack.Succinctly.Host 
+	project under the ServiceStack.Succinctly.Host.Mappers namespace. 
+	The following code example shows the definition of the IProductMapper interface. 
+
+	using System.Collections.Generic;
+	using OrderManagement.Core.Domain;
+	using ServiceStack.Succinctly.ServiceInterface.ProductModel;
+
+	namespace ServiceStack.Succinctly.Host.Mappers
+	{
+		public interface IProductMapper
+		{
+			Product ToProduct(CreateProduct request);
+			Product ToProduct(UpdateProduct request);
+			ProductResponse ToProductResponse(Product product);
+			List<ProductResponse> ToProductResponseList(List<Product> products);
+		}
+	}
+	
+	using System;
+	using System.Collections.Generic;
+	using AutoMapper;
+	using ServiceStack.Text;
+	using OrderManagement.Core.Domain;
+	using SrvObjType = ServiceStack.Succinctly.ServiceInterface;
+	using SrvObj = ServiceStack.Succinctly.ServiceInterface.ProductModel;
+
+	namespace ServiceStack.Succinctly.Host.Mappers
+	{
+		public class ProductMapper : IProductMapper
+		{
+			static ProductMapper()
+			{
+				//AutoMapper 6.2.2 desperate CreateMap insteaded of Mapper.Initialize(x=>x.CreateMap<Source,Dest>());
+				//Mapper.CreateMap<SrvObjType.Status, Status>();
+				//Mapper.CreateMap<Status, SrvObjType.Status>();
+				//Mapper.CreateMap<SrvObj.CreateProduct, Product>();
+				//Mapper.CreateMap<SrvObj.UpdateProduct, Product>();
+				//Mapper.CreateMap<Product, SrvObj.ProductResponse>();
+				Mapper.Initialize(x => x.CreateMap<SrvObjType.Status, Status>());
+				Mapper.Initialize(x => x.CreateMap<Status, SrvObjType.Status>());
+				Mapper.Initialize(x => x.CreateMap<SrvObj.CreateProduct, Product>());
+				Mapper.Initialize(x => x.CreateMap<SrvObj.UpdateProduct, Product>());
+				Mapper.Initialize(x => x.CreateMap<Product, SrvObj.ProductResponse>());
+			}
+
+			public Product ToProduct(SrvObj.CreateProduct request)
+			{
+				return Mapper.Map<Product>(request);
+			}
+
+			public Product ToProduct(SrvObj.UpdateProduct request)
+			{
+				return Mapper.Map<Product>(request);
+			}
+
+			public SrvObj.ProductResponse ToProductResponse(Product product)
+			{
+				var productResponse = Mapper.Map<SrvObj.ProductResponse>(product);
+
+				productResponse.Links = new List<SrvObjType.Link>
+					{
+						new SrvObjType.Link
+							{
+								Title = "self",
+								Rel = "self",
+								Href = "products/{0}".Fmt(product.Id),
+							}
+					};
+				return productResponse;
+			}
+
+			//Transforms a list of products into a list of ProductResponse
+			public List<SrvObj.ProductResponse> ToProductResponseList(List<Product> products)
+			{
+				var productResponseList = new List<SrvObj.ProductResponse>();
+				products.ForEach(x => productResponseList.Add(ToProductResponse(x)));
+				return productResponseList;
+			}
+		}
+	}	
+		   
+	Note: All of our services will have a Mapper class by design because we want to separate 
+	the Request and Response DTOs (service model) from the application domain model. 
+	
+	5.4 Validator implementation.
+	As we saw in the previous chapter, we can create some custom validation logic. We will create 
+	some in this case because we want to make our implementation a bit stronger. For our current 
+	example, we will just make sure that when the Product is created or updated, we check that the 
+	Name property is set and is not longer than 50 characters. We will create the following two 
+	classes in the ServiceStack.Succinctly.Host.Validation namespace, and will register 
+	those two validators in the application host. 
+	
+	namespace ServiceStack.Succinctly.Host.Validation
+	{
+		public class CreateProductValidator : AbstractValidator<CreateProduct> 
+		{ 
+			public CreateProductValidator() 
+			{ 
+				string nameNotSpecifiedMsg = "Name has not been specified."; 
+				string maxLenghtMsg = "Name cannot be longer than 50 characters."; 
+		 
+				RuleFor(r => r.Name) 
+					.NotEmpty().WithMessage(nameNotSpecifiedMsg) 
+					.NotNull().WithMessage(nameNotSpecifiedMsg) 
+					.Length(1, 50).WithMessage(maxLenghtMsg); 
+			} 
+		}
+		  
+		public class UpdateProductValidator : AbstractValidator<UpdateProduct> 
+		{ 
+			public UpdateProductValidator() 
+			{ 
+				string nameNotSpecifiedMsg = "Name has not been specified."; 
+				string maxLenghtMsg = "Name cannot be longer than 50 characters."; 
+		 
+				RuleFor(r => r.Name) 
+					.NotEmpty().WithMessage(nameNotSpecifiedMsg) 
+					.NotNull().WithMessage(nameNotSpecifiedMsg) 
+					.Length(1, 50).WithMessage(maxLenghtMsg); 
+			} 
+		}
+	}
+	Application Host Configuration    
+	The following code shows the full implementation of the application host. 
+	public class ServiceAppHost : AppHostBase 
+	{ 
+	  public ServiceAppHost() 
+			: base("Order Management", typeof(ServiceAppHost).Assembly) 
+	   { 
+		Routes 
+		.Add<GetProducts>  ("/products", "GET", "Returns a collection of Products") 
+		.Add<GetProduct>   ("/products/{Id}", "GET", "Returns a single Product") 
+		.Add<CreateProduct>("/products", "POST", "Create a product") 
+		.Add<UpdateProduct>("/products/{Id}", "PUT", "Update a product") 
+		.Add<DeleteProduct>("/products/{Id}", "DELETE", "Deletes a product") 
+		.Add<DeleteProduct>("/products", "DELETE", "Deletes all products"); 
+									
+		 Plugins.Add(new ValidationFeature()); 
+	   }  
+	 
+		public override void Configure(Container container) 
+		{ 
+			container.Register<IProductRepository>(new ProductRepository()); 
+			container.Register<IProductMapper>(new ProductMapper()); 
+					 
+			container.RegisterValidator(typeof(CreateProductValidator)); 
+			container.RegisterValidator(typeof(UpdateProductValidator)); 
+		} 
+	} 
+	
+	5.5 Service Implementation
+	ProductService implements two Get methods, one Post, one Put, and one Delete. Every 
+	ServiceStack service has to inherit from the ServiceStack.ServiceInterface.Service 
+	class.
+	As shown in the following code example, ProductService has two properties: ProductMapper 
+	and ProductRepository, which will hold the instances that will be injected at run time by the 
+	IoC container.
+	
+	namespace ServiceStack.Succinctly.Host.Services
+	public class ProductService : ServiceStack.ServiceInterface.Service 
+	{        
+		public IProductMapper ProductMapper { get; set; } 
+		public IProductRepository ProductRepository { get; set; } 
+	 
+		public ProductResponse Get(GetProduct request){…} 
+		public List<ProductResponse> Get(GetProducts request){} 
+		public ProductResponse Post(CreateProduct request){…} 
+		public ProductResponse Put(UpdateProduct request) {…}
+		public HttpResult Delete(DeleteProduct request){…} 
+	}
+	

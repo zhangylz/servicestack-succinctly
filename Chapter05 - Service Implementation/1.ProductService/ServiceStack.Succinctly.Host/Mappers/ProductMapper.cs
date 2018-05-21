@@ -12,11 +12,19 @@ namespace ServiceStack.Succinctly.Host.Mappers
     {
         static ProductMapper()
         {
-            Mapper.CreateMap<SrvObjType.Status, Status>();
-            Mapper.CreateMap<Status, SrvObjType.Status>();
-            Mapper.CreateMap<SrvObj.CreateProduct, Product>();
-            Mapper.CreateMap<SrvObj.UpdateProduct, Product>();
-            Mapper.CreateMap<Product, SrvObj.ProductResponse>();
+            //AutoMapper 6.2.2 desperate CreateMap insteaded of Mapper.Initialize(x=>x.CreateMap<Source,Dest>());
+            //Mapper.CreateMap<SrvObjType.Status, Status>();
+            //Mapper.CreateMap<Status, SrvObjType.Status>();
+            //Mapper.CreateMap<SrvObj.CreateProduct, Product>();
+            //Mapper.CreateMap<SrvObj.UpdateProduct, Product>();
+            //Mapper.CreateMap<Product, SrvObj.ProductResponse>();
+            Mapper.Initialize(cfg=> {
+                cfg.CreateMap<SrvObjType.Status, Status>();
+                cfg.CreateMap<Status, SrvObjType.Status>();
+                cfg.CreateMap<SrvObj.CreateProduct, Product>();
+                cfg.CreateMap<SrvObj.UpdateProduct, Product>();
+                cfg.CreateMap<Product, SrvObj.ProductResponse>();
+            });
         }
 
         public Product ToProduct(SrvObj.CreateProduct request)
